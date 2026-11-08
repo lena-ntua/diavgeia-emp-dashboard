@@ -3,6 +3,8 @@
 Dashboard με δεδομένα της Διαύγειας (dataset glossAPI/diavgeia).
 """
 
+import unicodedata
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -34,6 +36,14 @@ TYPOI = {
 }
 
 
+def xoris_tonous(keimeno):
+    """Αφαιρεί τόνους/διαλυτικά και κάνει κεφαλαία, ώστε η αναζήτηση
+    να βρίσκει π.χ. το «καθαριότητα» όταν ο χρήστης γράφει «ΚΑΘΑΡΙΟΤΗΤΑ»."""
+    keimeno = unicodedata.normalize("NFD", str(keimeno))
+    keimeno = "".join(c for c in keimeno if unicodedata.category(c) != "Mn")
+    return keimeno.upper()
+
+
 def euro(x):
     """Μορφή ποσού στα ελληνικά, π.χ. 1.234.567 €"""
     return f"{x:,.0f} €".replace(",", ".")
@@ -46,6 +56,7 @@ def fortosi():
     df["perigrafi_typou"] = df["typos"].map(TYPOI).fillna(df["typos"])
     df["minas"] = df["imerominia"].dt.to_period("M").dt.to_timestamp()
     df["link"] = "https://diavgeia.gov.gr/doc/" + df["ada"]
+    df["thema_anazitisi"] = df["thema"].fillna("").map(xoris_tonous)
     return df
 
 
@@ -84,7 +95,7 @@ fd = df[(df["imerominia"].dt.date >= apo) & (df["imerominia"].dt.date <= eos)]
 if monada != "Όλες":
     fd = fd[fd["monada"] == monada]
 if lexi:
-    fd = fd[fd["thema"].fillna("").str.contains(lexi, case=False, regex=False)]
+    fd = fd[fd["thema_anazitisi"].str.contains(xoris_tonous(lexi), regex=False)]
 
 anatheseis = fd[(fd["typos"] == "Β.2.1") & fd["poso"].notna()]
 
