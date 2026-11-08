@@ -7,6 +7,7 @@ import unicodedata
 
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 
 st.set_page_config(
@@ -58,6 +59,48 @@ def fortosi():
     df["link"] = "https://diavgeia.gov.gr/doc/" + df["ada"]
     df["thema_anazitisi"] = df["thema"].fillna("").map(xoris_tonous)
     return df
+
+
+@st.cache_data
+def keimena():
+    """Τα κείμενα των αναθέσεων/συμβάσεων, για τις περιλήψεις."""
+    k = pd.read_parquet("emp_keimena.parquet")
+    return dict(zip(k["ada"], k["keimeno"]))
+
+
+ODIGIES_LLM = """Είσαι βοηθός που εξηγεί αποφάσεις της ελληνικής δημόσιας διοίκησης σε απλούς πολίτες.
+Διάβασε την παρακάτω απόφαση του Εθνικού Μετσόβιου Πολυτεχνείου από τη Διαύγεια και γράψε
+περίληψη 3-4 προτάσεων σε απλά, καθημερινά ελληνικά, χωρίς νομικούς όρους. Πες:
+- τι αποφασίστηκε,
+- ποιος πληρώνεται (ανάδοχος),
+- πόσα χρήματα,
+- για ποιο σκοπό.
+Χρησιμοποίησε ΜΟΝΟ πληροφορίες που υπάρχουν στο κείμενο. Αν κάτι δεν αναφέρεται, γράψε ότι δεν αναφέρεται.
+Μην προσθέτεις εισαγωγή ή επίλογο.
+
+ΘΕΜΑ: {thema}
+
+ΚΕΙΜΕΝΟ ΑΠΟΦΑΣΗΣ:
+{keimeno}"""
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24 * 7)
+def perilipsi(ada, thema, keimeno):
+    """Στέλνει την απόφαση στο Google Gemini και επιστρέφει περίληψη.
+    Κρατά τις απαντήσεις μία εβδομάδα, για να μην ξοδεύεται το δωρεάν όριο."""
+    kleidi = st.secrets["GEMINI_API_KEY"]
+    montelo = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
+    apantisi = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{montelo}:generateContent",
+        headers={"x-goog-api-key": kleidi},
+        json={"contents": [{"parts": [{"text": ODIGIES_LLM.format(thema=thema, keimeno=keimeno)}]}]},
+        timeout=90,
+    )
+    if apantisi.status_code == 429:
+        raise RuntimeError("Ξεπεράστηκε προσωρινά το δωρεάν όριο του Gemini. Δοκιμάστε ξανά σε 1-2 λεπτά.")
+    apantisi.raise_for_status()
+    meri = apantisi.json()["candidates"][0]["content"]["parts"]
+    return "".join(m.get("text", "") for m in meri if not m.get("thought")).strip()
 
 
 df = fortosi()
@@ -178,3 +221,44 @@ st.download_button(
     file_name="anatheseis_emp.csv",
     mime="text/csv",
 )
+
+# ---------------- Περίληψη με LLM ----------------
+st.subheader("🤖 Περίληψη απόφασης σε απλή γλώσσα")
+
+try:
+    exei_kleidi = "GEMINI_API_KEY" in st.secrets
+except Exception:  # δεν υπάρχει καθόλου αρχείο secrets
+    exei_kleidi = False
+
+if not exei_kleidi:
+    st.info("Οι περιλήψεις δεν είναι διαθέσιμες: δεν έχει οριστεί κλειδί για το Google Gemini.")
+else:
+    kei = keimena()
+    diathesimes = anatheseis[anatheseis["ada"].isin(kei.keys())].sort_values("poso", ascending=False).head(500)
+    if diathesimes.empty:
+        st.write("Δεν υπάρχουν αναθέσεις με κείμενο για τα φίλτρα που επιλέξατε.")
+    else:
+        etiketes = {
+            r.ada: f"{r.imerominia:%d/%m/%Y} · {euro(r.poso)} · {str(r.thema)[:90]}"
+            for r in diathesimes.itertuples()
+        }
+        ada = st.selectbox(
+            "Επιλέξτε απόφαση (οι 500 μεγαλύτερες αναθέσεις με βάση τα φίλτρα — μπορείτε και να πληκτρολογήσετε):",
+            list(etiketes),
+            format_func=etiketes.get,
+        )
+        epilogi = diathesimes[diathesimes["ada"] == ada].iloc[0]
+        st.markdown(
+            f"**Ανάδοχος:** {epilogi['anadoxos'] or '—'} · **Ποσό:** {euro(epilogi['poso'])} · "
+            f"[Η απόφαση στη Διαύγεια]({epilogi['link']})"
+        )
+        if st.button("✨ Φτιάξε περίληψη", type="primary"):
+            with st.spinner("Το Gemini διαβάζει την απόφαση..."):
+                try:
+                    st.success(perilipsi(ada, epilogi["thema"], kei[ada]))
+                    st.caption(
+                        "⚠️ Η περίληψη δημιουργήθηκε αυτόματα από τεχνητή νοημοσύνη (Google Gemini) "
+                        "και μπορεί να περιέχει λάθη. Ελέγξτε πάντα την πρωτότυπη απόφαση."
+                    )
+                except Exception as e:
+                    st.error(f"Δεν ήταν δυνατή η περίληψη: {e}")
