@@ -3,6 +3,7 @@
 Dashboard με δεδομένα της Διαύγειας (dataset glossAPI/diavgeia).
 """
 
+import time
 import unicodedata
 
 import pandas as pd
@@ -89,18 +90,38 @@ def perilipsi(ada, thema, keimeno):
     """Στέλνει την απόφαση στο Google Gemini και επιστρέφει περίληψη.
     Κρατά τις απαντήσεις μία εβδομάδα, για να μην ξοδεύεται το δωρεάν όριο."""
     kleidi = st.secrets["GEMINI_API_KEY"]
-    montelo = st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash")
-    apantisi = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{montelo}:generateContent",
-        headers={"x-goog-api-key": kleidi},
-        json={"contents": [{"parts": [{"text": ODIGIES_LLM.format(thema=thema, keimeno=keimeno)}]}]},
-        timeout=90,
+    # Πρώτα το βασικό μοντέλο· αν είναι φορτωμένο, εναλλακτικά μοντέλα Flash
+    montela = [st.secrets.get("GEMINI_MODEL", "gemini-3.8-flash"), "gemini-flash-latest", "gemini-flash-lite-latest"]
+    keimeno_prompt = ODIGIES_LLM.format(thema=thema, keimeno=keimeno)
+    teleftaio_lathos = "άγνωστο σφάλμα"
+
+    for montelo in montela:
+        for prospatheia in range(2):  # 2 προσπάθειες ανά μοντέλο
+            try:
+                apantisi = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{montelo}:generateContent",
+                    headers={"x-goog-api-key": kleidi},
+                    json={"contents": [{"parts": [{"text": keimeno_prompt}]}]},
+                    timeout=90,
+                )
+            except requests.RequestException:
+                teleftaio_lathos = "δεν υπήρξε σύνδεση με το Gemini"
+                time.sleep(2)
+                continue
+            if apantisi.status_code == 200:
+                meri = apantisi.json()["candidates"][0]["content"]["parts"]
+                return "".join(m.get("text", "") for m in meri if not m.get("thought")).strip()
+            if apantisi.status_code in (400, 401, 403):
+                raise RuntimeError("Το κλειδί του Gemini δεν έγινε δεκτό. Ελέγξτε τα Secrets της εφαρμογής.")
+            if apantisi.status_code == 404:
+                break  # το μοντέλο δεν υπάρχει → επόμενο μοντέλο
+            # 429 (όριο) ή 5xx (φορτωμένος server): περιμένουμε λίγο και ξαναδοκιμάζουμε
+            teleftaio_lathos = f"κωδικός {apantisi.status_code}"
+            time.sleep(3 * (prospatheia + 1))
+
+    raise RuntimeError(
+        f"Η υπηρεσία Gemini είναι προσωρινά φορτωμένη ({teleftaio_lathos}). Δοκιμάστε ξανά σε λίγα λεπτά."
     )
-    if apantisi.status_code == 429:
-        raise RuntimeError("Ξεπεράστηκε προσωρινά το δωρεάν όριο του Gemini. Δοκιμάστε ξανά σε 1-2 λεπτά.")
-    apantisi.raise_for_status()
-    meri = apantisi.json()["candidates"][0]["content"]["parts"]
-    return "".join(m.get("text", "") for m in meri if not m.get("thought")).strip()
 
 
 df = fortosi()
