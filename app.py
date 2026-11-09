@@ -255,12 +255,20 @@ if not exei_kleidi:
     st.info("Οι περιλήψεις δεν είναι διαθέσιμες: δεν έχει οριστεί κλειδί για το Google Gemini.")
 else:
     kei = keimena()
-    diathesimes = anatheseis[anatheseis["ada"].isin(kei.keys())].sort_values("poso", ascending=False).head(500)
-    if diathesimes.empty:
-        st.write("Δεν υπάρχουν αναθέσεις με κείμενο για τα φίλτρα που επιλέξατε.")
+    ada_xrista = st.text_input(
+        "Γράψτε έναν ΑΔΑ (π.χ. ΨΟΩΑ46ΨΖΣ4-ΖΤΗ) ή αφήστε το κενό και διαλέξτε από τη λίστα:"
+    ).strip().upper()
+    if ada_xrista:
+        diathesimes = df[(df["ada"] == ada_xrista) & df["ada"].isin(kei.keys())]
+        if diathesimes.empty:
+            st.warning("Δεν βρέθηκε ανάθεση ή σύμβαση με κείμενο για αυτόν τον ΑΔΑ.")
     else:
+        diathesimes = anatheseis[anatheseis["ada"].isin(kei.keys())].sort_values("poso", ascending=False).head(500)
+    if diathesimes.empty and not ada_xrista:
+        st.write("Δεν υπάρχουν αναθέσεις με κείμενο για τα φίλτρα που επιλέξατε.")
+    elif not diathesimes.empty:
         etiketes = {
-            r.ada: f"{r.imerominia:%d/%m/%Y} · {euro(r.poso)} · {str(r.thema)[:90]}"
+            r.ada: f"{r.imerominia:%d/%m/%Y} · {euro(r.poso) if pd.notna(r.poso) else '—'} · {str(r.thema)[:90]}"
             for r in diathesimes.itertuples()
         }
         ada = st.selectbox(
@@ -270,7 +278,8 @@ else:
         )
         epilogi = diathesimes[diathesimes["ada"] == ada].iloc[0]
         st.markdown(
-            f"**Ανάδοχος:** {epilogi['anadoxos'] or '—'} · **Ποσό:** {euro(epilogi['poso'])} · "
+            f"**ΑΔΑ:** {ada} · **Ανάδοχος:** {epilogi['anadoxos'] or '—'} · "
+            f"**Ποσό:** {euro(epilogi['poso']) if pd.notna(epilogi['poso']) else '—'} · "
             f"[Η απόφαση στη Διαύγεια]({epilogi['link']})"
         )
         if st.button("✨ Φτιάξε περίληψη", type="primary"):
