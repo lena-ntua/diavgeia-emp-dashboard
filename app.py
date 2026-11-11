@@ -57,8 +57,25 @@ def fortosi():
     df["imerominia"] = pd.to_datetime(df["imerominia"])
     df["perigrafi_typou"] = df["typos"].map(TYPOI).fillna(df["typos"])
     df["minas"] = df["imerominia"].dt.to_period("M").dt.to_timestamp()
-    df["link"] = "https://diavgeia.gov.gr/doc/" + df["ada"]
+    df["link"] = "https://diavgeia.gov.gr/decision/view/" + df["ada"]
     df["thema_anazitisi"] = df["thema"].fillna("").map(xoris_tonous)
+
+    # Ο ίδιος ανάδοχος εμφανίζεται με λίγο διαφορετικά ονόματα (π.χ. «Δ.Ο.Υ.» / «Δ.Ο.Υ»).
+    # Τους ενώνουμε με βάση τον ΑΦΜ (όπου υπάρχει έγκυρος) και κρατάμε το πιο συχνό όνομα.
+    onoma = df["anadoxos"].fillna("").str.strip()
+    onoma = onoma.where(onoma.str.contains(r"[A-Za-zΑ-Ωα-ωΆ-Ώά-ώ]", regex=True), "")  # «---» κ.λπ. = χωρίς όνομα
+    afm = df["afm_anadoxou"].fillna("").astype(str).str.strip()
+    kleidi = afm.where(afm.str.fullmatch(r"\d{9}") & (afm != "000000000"), "ΟΝΟΜΑ:" + onoma)
+    kyrio_onoma = (
+        pd.DataFrame({"k": kleidi, "o": onoma})[onoma != ""]
+        .groupby("k")["o"].agg(lambda x: x.value_counts().index[0])
+    )
+    df["anadoxos_enomenos"] = kleidi.map(kyrio_onoma).where(onoma != "")
+
+    # Πληρωμές προς τη ΔΟΥ και τον ΕΦΚΑ είναι φόροι/εισφορές, όχι προμηθευτές.
+    df["foros_eisfora"] = onoma.str.match(
+        r"^(ΔΗΜΟΣΙΑ ΟΙΚΟΝΟΜΙΚΗ ΥΠΗΡΕΣΙΑ|Δ\.?Ο\.?Υ\.?\s|e-?ΕΦΚΑ|Ε\.?Φ\.?Κ\.?Α\.?\b|ΕΝΙΑΙΟΣ ΦΟΡΕΑΣ ΚΟΙΝΩΝΙΚΗΣ)"
+    ) | onoma.isin(["ΕΦΚΑ", "e-ΕΦΚΑ", "Ε.Φ.Κ.Α."])
     return df
 
 
@@ -192,17 +209,25 @@ aristera, dexia = st.columns(2)
 
 with aristera:
     st.subheader("🏆 Οι 10 μεγαλύτεροι ανάδοχοι")
+    xoris_forous = st.checkbox(
+        "Χωρίς φόρους και εισφορές (ΔΟΥ, ΕΦΚΑ)", value=True,
+        help="Οι πληρωμές προς ΔΟΥ και ΕΦΚΑ είναι παρακρατήσεις φόρων και εισφορών, όχι αγορές από προμηθευτές.",
+    )
+    gia_top = anatheseis[~anatheseis["foros_eisfora"]] if xoris_forous else anatheseis
     top10 = (
-        anatheseis.dropna(subset=["anadoxos"])
-        .groupby("anadoxos", as_index=False)["poso"].sum()
+        gia_top.dropna(subset=["anadoxos_enomenos"])
+        .groupby("anadoxos_enomenos", as_index=False)["poso"].sum()
         .nlargest(10, "poso")
         .sort_values("poso")
     )
+    top10["etiketa"] = top10["anadoxos_enomenos"].str.slice(0, 45)
     gr2 = px.bar(
-        top10, x="poso", y="anadoxos", orientation="h",
-        labels={"poso": "Ποσό (€)", "anadoxos": ""},
+        top10, x="poso", y="etiketa", orientation="h",
+        labels={"poso": "Ποσό (€)", "etiketa": ""},
+        hover_name="anadoxos_enomenos",
     )
-    gr2.update_traces(hovertemplate="%{y}<br>%{x:,.0f} €<extra></extra>")
+    st.caption("Ο ίδιος ανάδοχος με διαφορετική γραφή του ονόματος μετριέται μία φορά (ένωση με βάση τον ΑΦΜ).")
+    gr2.update_traces(hovertemplate="%{hovertext}<br>%{x:,.0f} €<extra></extra>")
     st.plotly_chart(gr2, width="stretch")
 
 with dexia:
@@ -292,3 +317,31 @@ else:
                     )
                 except Exception as e:
                     st.error(f"Δεν ήταν δυνατή η περίληψη: {e}")
+
+# ---------------- Σχετικά ----------------
+st.divider()
+with st.expander("ℹ️ Σχετικά με την εφαρμογή και την αξιολόγησή της"):
+    st.markdown(
+        """
+**Τι είναι:** Εργασία για το μάθημα «Σύγχρονες Διαδικτυακές Υπηρεσίες» του ΔΠΜΣ
+«Τεχνο-Οικονομικά Συστήματα» (ΕΜΠ, 2026-27). Δείχνει τις αποφάσεις του ΕΜΠ στη Διαύγεια
+για τα έτη 2022–2026 και εξηγεί με απλά λόγια όποια ανάθεση διαλέξει ο χρήστης.
+
+**Δεδομένα:** dataset [glossAPI/diavgeia](https://huggingface.co/datasets/glossAPI/diavgeia)
+(άδεια CC BY 4.0), κωδικός φορέα ΕΜΠ στη Διαύγεια: 99203026.
+
+**Αξιολόγηση** σε 20 τυχαίες αναθέσεις (4 ανά έτος), με έλεγχο στην πρωτότυπη απόφαση στη Διαύγεια:
+
+| Τι ελέγχθηκε | Αποτέλεσμα |
+|---|---|
+| Σωστό ποσό | 17 από 20 (85%) |
+| Σωστός ανάδοχος | 20 από 20 (100%) |
+| Ποιότητα περίληψης (1–5) | μέσος όρος 4,95 |
+
+Στις 3 αποφάσεις με διαφορά ποσού, η εφαρμογή έδειχνε **μικρότερο** ποσό από το έγγραφο.
+Η εφαρμογή παίρνει το ποσό από τα δομημένα στοιχεία που δηλώνει ο φορέας στη Διαύγεια,
+τα οποία δεν συμφωνούν πάντα με το κείμενο του εγγράφου.
+
+**Κώδικας:** [github.com/lena-ntua/diavgeia-emp-dashboard](https://github.com/lena-ntua/diavgeia-emp-dashboard)
+"""
+    )
